@@ -58,7 +58,7 @@ The convergence profiles below demonstrate stable training across 5 targeted fin
 ###  Training Validation Proof (5-Epoch Execution Log)
 Below is the verified stdout execution trace confirming successful network convergence, loss minimization, and target accuracy verification through the 5 training cycles:
 
-<img width="548" height="455" alt="confusion matrix" src="https://github.com/user-attachments/assets/e223a11b-7119-4b30-9208-cefab81b6e35" />
+<img width="1871" height="1043" alt="Screenshot 2026-05-04 122637" src="https://github.com/user-attachments/assets/731af447-8911-4a75-9421-d6f37aabbbe2" />
 
 ---
 
