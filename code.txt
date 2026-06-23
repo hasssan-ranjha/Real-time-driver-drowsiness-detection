@@ -1,0 +1,785 @@
+# %%
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+# 1. Define your directories
+train_dir = 'train'
+val_dir = 'val'
+test_dir = 'test'
+
+# 2. Set the image size for MobileNetV2 and batch size
+IMG_SIZE = (224, 224)
+BATCH_SIZE = 32
+
+# 3. Load the datasets 
+print("Loading Training Data:")
+train_dataset = tf.keras.utils.image_dataset_from_directory(
+    train_dir,
+    shuffle=True,
+    batch_size=BATCH_SIZE,
+    image_size=IMG_SIZE
+)
+
+print("\nLoading Validation Data:")
+val_dataset = tf.keras.utils.image_dataset_from_directory(
+    val_dir,
+    shuffle=True,
+    batch_size=BATCH_SIZE,
+    image_size=IMG_SIZE
+)
+
+# Extract the class names
+class_names = train_dataset.class_names
+print(f"\nClass names assigned by TensorFlow: {class_names}")
+
+# 4. Data Visualization (Save this output for your report!)
+plt.figure(figsize=(10, 10))
+for images, labels in train_dataset.take(1): # Grab one batch of images
+    for i in range(9): # Display the first 9 images
+        ax = plt.subplot(3, 3, i + 1)
+        plt.imshow(images[i].numpy().astype("uint8"))
+        plt.title(class_names[labels[i]])
+        plt.axis("off")
+        
+plt.suptitle("Sample Training Images: Awake vs. Sleepy", fontsize=16)
+plt.show()
+
+# %%
+# 5. Load the Pre-trained MobileNetV2 Model (The "Body")
+print("Downloading MobileNetV2...")
+base_model = tf.keras.applications.MobileNetV2(
+    input_shape=(224, 224, 3), # The size we resized our images to!
+    include_top=False,         # We drop the original 1,000 classes
+    weights='imagenet'         # Use the powerful pre-trained weights
+)
+
+# Freeze the base model so we don't destroy its pre-trained knowledge
+base_model.trainable = False
+
+# 6. Add our custom classification head (The "Brain")
+model = tf.keras.Sequential([
+    base_model,
+    tf.keras.layers.GlobalAveragePooling2D(),
+    tf.keras.layers.Dense(128, activation='relu'),
+    tf.keras.layers.Dropout(0.2), # Drops 20% of neurons randomly to prevent overfitting
+    tf.keras.layers.Dense(1, activation='sigmoid') # Binary output: closer to 0 (awake) or 1 (sleepy)
+])
+
+# 7. Compile the model (Telling it how to learn)
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+              loss='binary_crossentropy', # Standard loss function for 2 classes
+              metrics=['accuracy'])
+
+print("\n✅ Model successfully built! Here is the architecture:")
+model.summary()
+
+# %%
+# 8. Train the Model
+# An "Epoch" is one full pass through the entire dataset. 
+# We'll start with 5. You can always increase this later to get better accuracy!
+EPOCHS = 5 
+
+print(f"Starting training for {EPOCHS} epochs... Your computer fans might get loud!")
+
+history = model.fit(
+    train_dataset,
+    validation_data=val_dataset,
+    epochs=EPOCHS
+)
+
+# 9. Save the Brain!
+# We save it so we don't have to retrain it every time we want to use the webcam later.
+model.save('drowsiness_model.h5')
+print("\n✅ Training complete and model saved as 'drowsiness_model.h5'!")
+
+# %%
+# 10. Plot Training & Validation Loss and Accuracy (Required for Deliverable b)
+acc = history.history['accuracy']
+val_acc = history.history['val_accuracy']
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+epochs_range = range(EPOCHS)
+
+plt.figure(figsize=(14, 6))
+
+# Plot Accuracy
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, acc, label='Training Accuracy', linewidth=2, marker='o')
+plt.plot(epochs_range, val_acc, label='Validation Accuracy', linewidth=2, marker='o')
+plt.legend(loc='lower right')
+plt.title('Model Accuracy (Higher is better)', fontsize=14)
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.grid(True)
+
+# Plot Loss
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, loss, label='Training Loss', linewidth=2, marker='o')
+plt.plot(epochs_range, val_loss, label='Validation Loss', linewidth=2, marker='o')
+plt.legend(loc='upper right')
+plt.title('Model Loss (Lower is better)', fontsize=14)
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.grid(True)
+
+plt.suptitle("Training Data Loss and Accuracy Over 5 Epochs", fontsize=16, fontweight='bold')
+plt.show()
+
+# %% [markdown]
+# WebCam Code
+
+# %%
+import cv2
+import numpy as np
+import tensorflow as tf
+import pygame
+import os
+
+print("Loading AI Brain...")
+model = tf.keras.models.load_model('drowsiness_model.h5')
+
+# --- CUSTOM AUDIO SETUP ---
+pygame.mixer.init()
+audio_file = "AlarmSound.mp3" # Your uploaded audio file
+
+if os.path.exists(audio_file):
+    pygame.mixer.music.load(audio_file)
+    sound_loaded = True
+else:
+    sound_loaded = False
+    print(f"⚠️ Warning: Could not find {audio_file}. Alarm will be silent.")
+
+is_alarm_playing = False
+# --------------------------
+
+# 1. Load BOTH the face detector AND the eye detector
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+cap = cv2.VideoCapture(0)
+sleepy_frames = 0
+ALARM_THRESHOLD = 5 # I lowered this to 5 so the alarm triggers faster for testing!
+
+print("\n🚨 WEBCAM TURNING ON! 🚨")
+print("--> Click on the video window that pops up, and press 'q' on your keyboard to stop it.")
+
+while True:
+    ret, frame = cap.read()
+    if not ret: 
+        break
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Find the face
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+
+    for (x, y, w, h) in faces:
+        # Draw a blue box around the face
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+        
+        # Isolate the face area to search for eyes
+        roi_gray = gray[y:y+h, x:x+w]
+        roi_color = frame[y:y+h, x:x+w]
+        
+        # Find eyes within the face
+        eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=5)
+        
+        if len(eyes) == 0:
+            # Failsafe: If the camera completely loses your eyes, they are likely fully shut!
+            sleepy_frames += 1
+            label = "SLEEPY (Eyes Shut)"
+            color = (0, 0, 255)
+        else:
+            # Process the first eye we find
+            for (ex, ey, ew, eh) in eyes:
+                # Draw a green box around the eye so you can see it working
+                cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
+                
+                # Crop out ONLY the eye!
+                eye_roi = roi_color[ey:ey+eh, ex:ex+ew]
+                
+                # Resize the eye to 224x224 (This is what the AI was trained on!)
+                resized_eye = cv2.resize(eye_roi, (224, 224))
+                img_array = tf.expand_dims(resized_eye, 0)
+                
+                # 🧠 The AI makes its guess!
+                prediction = model.predict(img_array, verbose=0)
+                score = prediction[0][0] 
+                
+                if score > 0.5:
+                    label = "SLEEPY"
+                    color = (0, 0, 255)
+                    sleepy_frames += 1
+                else:
+                    label = "AWAKE"
+                    color = (0, 255, 0)
+                    sleepy_frames = 0
+                    
+                break # We only need to check one eye per frame to stay fast
+                
+        # Sound the Alarm!
+        if sleepy_frames >= ALARM_THRESHOLD:
+            cv2.putText(frame, "ALARM: WAKE UP!", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+            
+            # Start the MP3 if it isn't playing already
+            if sound_loaded and not is_alarm_playing:
+                pygame.mixer.music.play(-1) # -1 makes it loop endlessly
+                is_alarm_playing = True
+        else:
+            # Stop the MP3 when you wake up
+            if sound_loaded and is_alarm_playing:
+                pygame.mixer.music.stop()
+                is_alarm_playing = False
+                
+        # Write the label
+        cv2.putText(frame, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
+    cv2.imshow('Drowsiness Detection System', frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Safely shut down audio and camera
+if sound_loaded and is_alarm_playing:
+    pygame.mixer.music.stop()
+cap.release()
+cv2.destroyAllWindows()
+print("\nCamera safely turned off.")
+
+# %%
+import cv2
+
+import numpy as np
+
+import tensorflow as tf
+
+import winsound
+
+
+
+print("Loading AI Brain...")
+
+model = tf.keras.models.load_model('drowsiness_model.h5')
+
+
+
+# 1. Load BOTH the face detector AND the eye detector
+
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+
+
+cap = cv2.VideoCapture(0)
+
+sleepy_frames = 0
+
+ALARM_THRESHOLD = 5 # I lowered this to 5 so the alarm triggers faster for testing!
+
+
+
+print("\n🚨 WEBCAM TURNING ON! 🚨")
+
+print("--> Click on the video window that pops up, and press 'q' on your keyboard to stop it.")
+
+
+
+while True:
+
+    ret, frame = cap.read()
+
+    if not ret:
+
+        break
+
+
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+   
+
+    # Find the face
+
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+
+
+
+    for (x, y, w, h) in faces:
+
+        # Draw a blue box around the face
+
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+
+       
+
+        # Isolate the face area to search for eyes
+
+        roi_gray = gray[y:y+h, x:x+w]
+
+        roi_color = frame[y:y+h, x:x+w]
+
+       
+
+        # Find eyes within the face
+
+        eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=5)
+
+       
+
+        if len(eyes) == 0:
+
+            # Failsafe: If the camera completely loses your eyes, they are likely fully shut!
+
+            sleepy_frames += 1
+
+            label = "SLEEPY (Eyes Shut)"
+
+            color = (0, 0, 255)
+
+        else:
+
+            # Process the first eye we find
+
+            for (ex, ey, ew, eh) in eyes:
+
+                # Draw a green box around the eye so you can see it working
+
+                cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
+
+               
+
+                # Crop out ONLY the eye!
+
+                eye_roi = roi_color[ey:ey+eh, ex:ex+ew]
+
+               
+
+                # Resize the eye to 224x224 (This is what the AI was trained on!)
+
+                resized_eye = cv2.resize(eye_roi, (224, 224))
+
+                img_array = tf.expand_dims(resized_eye, 0)
+
+               
+
+                # 🧠 The AI makes its guess!
+
+                prediction = model.predict(img_array, verbose=0)
+
+                score = prediction[0][0]
+
+               
+
+                if score > 0.5:
+
+                    label = "SLEEPY"
+
+                    color = (0, 0, 255)
+
+                    sleepy_frames += 1
+
+                else:
+
+                    label = "AWAKE"
+
+                    color = (0, 255, 0)
+
+                    sleepy_frames = 0
+
+                   
+
+                break # We only need to check one eye per frame to stay fast
+
+               
+
+        # Sound the Alarm!
+
+        if sleepy_frames >= ALARM_THRESHOLD:
+
+            cv2.putText(frame, "ALARM: WAKE UP!", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+
+            winsound.Beep(1000, 500)
+
+           
+
+        # Write the label
+
+        cv2.putText(frame, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
+
+
+    cv2.imshow('Drowsiness Detection System', frame)
+
+
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+
+        break
+
+
+
+cap.release()
+
+cv2.destroyAllWindows()
+
+print("\nCamera safely turned off.")
+
+# %%
+import cv2
+import numpy as np
+import tensorflow as tf
+import winsound
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+import urllib.request
+import os
+
+print("Loading AI Brain...")
+model = tf.keras.models.load_model('drowsiness_model.h5')
+
+# --- MEDIAPIPE TASKS API SETUP ---
+model_path = 'face_landmarker.task'
+if not os.path.exists(model_path):
+    print("Downloading Google's Face Landmark AI model...")
+    url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+    urllib.request.urlretrieve(url, model_path)
+
+base_options = python.BaseOptions(model_asset_path=model_path)
+options = vision.FaceLandmarkerOptions(
+    base_options=base_options,
+    running_mode=vision.RunningMode.IMAGE, 
+    num_faces=1)
+detector = vision.FaceLandmarker.create_from_options(options)
+# ------------------------------------------
+
+# Turn on Webcam
+cap = cv2.VideoCapture(0)
+sleepy_frames = 0
+ALARM_THRESHOLD = 5 
+frame_counter = 0 
+
+# State variables so the labels stay on screen smoothly
+current_label = "AWAKE"
+current_color = (0, 255, 0)
+
+# The exact 3D dot ID numbers for the left eye
+LEFT_EYE_DOTS = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+
+print("\n🚨 SMOOTH TRACKING WEBCAM TURNING ON! 🚨")
+print("--> Click on the video window that pops up, and press 'q' on your keyboard to stop it.")
+while True:
+    ret, frame = cap.read()
+    if not ret: 
+        break
+
+    frame_counter += 1
+    
+    # MediaPipe needs RGB to find the face
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+    h, w, _ = frame.shape
+    
+    results = detector.detect(mp_image)
+
+    if results.face_landmarks:
+        for face_landmarks in results.face_landmarks:
+            
+            x_min, y_min = w, h
+            x_max, y_max = 0, 0
+            
+            for idx in LEFT_EYE_DOTS:
+                x = int(face_landmarks[idx].x * w)
+                y = int(face_landmarks[idx].y * h)
+                if x < x_min: x_min = x
+                if y < y_min: y_min = y
+                if x > x_max: x_max = x
+                if y > y_max: y_max = y
+            
+            padding = 10 
+            x_min = max(0, x_min - padding)
+            y_min = max(0, y_min - padding)
+            x_max = min(w, x_max + padding)
+            y_max = min(h, y_max + padding)
+            
+            cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), current_color, 2)
+            
+            eye_roi = frame[y_min:y_max, x_min:x_max]
+            
+            if eye_roi.size > 0 and frame_counter % 3 == 0:
+                
+                # 🔥 FIX 1: Convert BGR to RGB so the AI recognizes human skin tones!
+                eye_rgb = cv2.cvtColor(eye_roi, cv2.COLOR_BGR2RGB)
+                
+                resized_eye = cv2.resize(eye_rgb, (224, 224))
+                img_array = np.expand_dims(resized_eye, axis=0)
+                
+                # Note: If your training code already had a "Rescaling" layer built into it,
+                # you might need to remove the " / 255.0 " below. But let's leave it for now.
+                img_array = img_array.astype('float32') / 255.0 
+                
+                prediction = model.predict(img_array, verbose=0)
+                score = prediction[0][0]
+                
+                # 🔥 FIX 2: Correcting the Alphabetical Logic!
+                # Closed (Sleepy) = 0, Open (Awake) = 1
+                if score < 0.5:  # <--- CHANGED FROM > TO <
+                    current_label = "SLEEPY"
+                    current_color = (0, 0, 255)
+                    sleepy_frames += 1
+                else:
+                    current_label = "AWAKE"
+                    current_color = (0, 255, 0)
+                    sleepy_frames = 0
+                    
+        if sleepy_frames >= ALARM_THRESHOLD:
+            cv2.putText(frame, "ALARM: WAKE UP!", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+            winsound.Beep(1000, 500) 
+            
+        cv2.putText(frame, current_label, (x_min, y_min-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, current_color, 2)
+    else:
+        sleepy_frames += 1
+
+    cv2.imshow('Drowsiness Detection System', frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+print("\nCamera safely turned off.")
+
+# %%
+
+
+# %%
+import cv2
+import numpy as np
+import tensorflow as tf
+import pygame
+import os
+
+print("Loading AI Brain...")
+model = tf.keras.models.load_model('drowsiness_model.h5')
+
+# --- CUSTOM AUDIO SETUP ---
+pygame.mixer.init()
+audio_file = "AlarmSound.mp3" # Your uploaded audio file
+
+if os.path.exists(audio_file):
+    pygame.mixer.music.load(audio_file)
+    sound_loaded = True
+else:
+    sound_loaded = False
+    print(f"⚠️ Warning: Could not find {audio_file}. Alarm will be silent.")
+
+is_alarm_playing = False
+# --------------------------
+
+# 1. Load BOTH the face detector AND the eye detector
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+cap = cv2.VideoCapture(0)
+sleepy_frames = 0
+ALARM_THRESHOLD = 5 # I lowered this to 5 so the alarm triggers faster for testing!
+
+print("\n🚨 WEBCAM TURNING ON! 🚨")
+print("--> Click on the video window that pops up, and press 'q' on your keyboard to stop it.")
+
+while True:
+    ret, frame = cap.read()
+    if not ret: 
+        break
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Find the face
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+
+    for (x, y, w, h) in faces:
+        # Draw a blue box around the face
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+        
+        # Isolate the face area to search for eyes
+        roi_gray = gray[y:y+h, x:x+w]
+        roi_color = frame[y:y+h, x:x+w]
+        
+        # Find eyes within the face
+        eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=5)
+        
+        if len(eyes) == 0:
+            # Failsafe: If the camera completely loses your eyes, they are likely fully shut!
+            sleepy_frames += 1
+            label = "SLEEPY (Eyes Shut)"
+            color = (0, 0, 255)
+        else:
+            # Process the first eye we find
+            for (ex, ey, ew, eh) in eyes:
+                # Draw a green box around the eye so you can see it working
+                cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
+                
+                # Crop out ONLY the eye!
+                eye_roi = roi_color[ey:ey+eh, ex:ex+ew]
+                
+                # Resize the eye to 224x224 (This is what the AI was trained on!)
+                resized_eye = cv2.resize(eye_roi, (224, 224))
+                img_array = tf.expand_dims(resized_eye, 0)
+                
+                # 🧠 The AI makes its guess!
+                prediction = model.predict(img_array, verbose=0)
+                score = prediction[0][0] 
+                
+                if score > 0.5:
+                    label = "SLEEPY"
+                    color = (0, 0, 255)
+                    sleepy_frames += 1
+                else:
+                    label = "AWAKE"
+                    color = (0, 255, 0)
+                    sleepy_frames = 0
+                    
+                break # We only need to check one eye per frame to stay fast
+                
+        # Sound the Alarm!
+        if sleepy_frames >= ALARM_THRESHOLD:
+            cv2.putText(frame, "ALARM: WAKE UP!", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+            
+            # Start the MP3 if it isn't playing already
+            if sound_loaded and not is_alarm_playing:
+                pygame.mixer.music.play(-1) # -1 makes it loop endlessly
+                is_alarm_playing = True
+        else:
+            # Stop the MP3 when you wake up
+            if sound_loaded and is_alarm_playing:
+                pygame.mixer.music.stop()
+                is_alarm_playing = False
+                
+        # Write the label
+        cv2.putText(frame, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
+    cv2.imshow('Drowsiness Detection System', frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Safely shut down audio and camera
+if sound_loaded and is_alarm_playing:
+    pygame.mixer.music.stop()
+cap.release()
+cv2.destroyAllWindows()
+print("\nCamera safely turned off.")
+
+# %%
+import cv2
+import numpy as np
+import tensorflow as tf
+import pygame 
+
+print("Loading AI Brain...")
+model = tf.keras.models.load_model('drowsiness_model.h5')
+
+# --- AUDIO SETUP ---
+pygame.mixer.init()
+pygame.mixer.music.load('AlarmSound.mp3') 
+is_alarm_playing = False
+# ----------------------
+
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+cap = cv2.VideoCapture(0)
+sleepy_frames = 0
+ALARM_THRESHOLD = 5 
+frame_counter = 0
+
+# These variables hold the state so the screen doesn't flicker
+display_label = "WAITING..."
+display_color = (0, 255, 0)
+x, y = 50, 50 # Default text position
+
+print("\n🚨 STABILIZED WEBCAM TURNING ON! 🚨")
+print("--> Click on the video window that pops up, and press 'q' on your keyboard to stop it.")
+
+while True:
+    ret, frame = cap.read()
+    if not ret: 
+        break
+
+    frame_counter += 1
+    
+    # Only run the heavy detection math every 3rd frame to stop laptop lag!
+    if frame_counter % 3 == 0:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+
+        # If no face is found at all, we assume the person fell completely over
+        if len(faces) == 0:
+            sleepy_frames += 1
+
+        for (fx, fy, w, h) in faces:
+            x, y = fx, fy # Update text position to track the face
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+            
+            roi_gray = gray[y:y+h, x:x+w]
+            roi_color = frame[y:y+h, x:x+w]
+            
+            eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=5)
+            
+            if len(eyes) == 0:
+                # The camera lost the eye!
+                sleepy_frames += 1
+            else:
+                for (ex, ey, ew, eh) in eyes:
+                    cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
+                    
+                    eye_roi = roi_color[ey:ey+eh, ex:ex+ew]
+                    resized_eye = cv2.resize(eye_roi, (224, 224))
+                    
+                    # Format image for the AI
+                    img_array = tf.cast(tf.expand_dims(resized_eye, 0), tf.float32) / 255.0
+                    
+                    prediction = model.predict(img_array, verbose=0)
+                    score = prediction[0][0] 
+                    
+                    # 🔥 THE CRUCIAL FIX: 0 = Sleepy, so we check if score is LESS THAN 0.5
+                    if score < 0.5: 
+                        sleepy_frames += 1
+                    else:
+                        sleepy_frames = 0 # Eyes are open, reset the alarm timer!
+                        
+                    break # Process one eye to save CPU speed
+                    
+    # --- VISUAL STABILITY BUFFER ---
+    if sleepy_frames >= 2:
+        display_label = "SLEEPY"
+        display_color = (0, 0, 255)
+    else:
+        display_label = "AWAKE"
+        display_color = (0, 255, 0)
+        
+    # --- ALARM LOGIC ---
+    if sleepy_frames >= ALARM_THRESHOLD:
+        cv2.putText(frame, "ALARM: WAKE UP!", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+        if not is_alarm_playing:
+            pygame.mixer.music.play(-1) 
+            is_alarm_playing = True
+    else:
+        if is_alarm_playing:
+            pygame.mixer.music.stop()
+            is_alarm_playing = False
+            
+    cv2.putText(frame, display_label, (x, max(30, y-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, display_color, 2)
+    cv2.imshow('Drowsiness Detection System', frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+pygame.mixer.quit()
+cv2.destroyAllWindows()
+print("\nCamera safely turned off.")
+
+

@@ -1,0 +1,51 @@
+# ====================================================================
+# PROJECT: dizziness-detection-using-camera
+# ====================================================================
+
+# 1. Python Cache (Temporary files Python creates when running code)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 2. Virtual Environments (Never upload your local environment folders)
+venv/
+.venv/
+env/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# 3. Datasets & Large Media (Keeps heavy media & models off GitHub)
+/dataset/
+/images/
+/train/
+/val/
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.zip
+*.tar.gz
+
+# 4. Large Model Weights (Keep code only, models go to releases/drive if too big)
+*.h5
+*.task
+*.pb
+*.onnx
+*.pkl
+*.pt
+*.pth
+
+# 5. PyInstaller Artifacts (Since you bundled the pipeline into an .exe)
+build/
+dist/
+*.spec
+*.exe
+
+# 6. Operating System Junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 7. Configuration & Secret Keys
+.env
