@@ -1,7 +1,5 @@
 # Real-Time AI-Based Driver Drowsiness Detection System
 
-# Real-Time AI-Based Driver Drowsiness Detection System
-
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![TensorFlow](https://img.shields.io/badge/TensorFlow-2.x-orange.svg)](https://tensorflow.org)
 [![Keras](https://img.shields.io/badge/Keras-2.x-red.svg?style=flat&logo=keras)](https://keras.io/)
